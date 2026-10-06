@@ -1,0 +1,16 @@
+# Never commit WireGuard secrets or generated profiles
+*.key
+*.pub
+*.psk
+*.conf
+*.qr
+.env
+.env.*
+clients/
+secrets/
+*.log
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
