@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+US_IF="research-us"
+UK_IF="research-uk"
+US_CONF="/etc/wireguard/${US_IF}.conf"
+UK_CONF="/etc/wireguard/${UK_IF}.conf"
+LOCK_CHAIN="RVPN_LOCK"
+
+require_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    echo "Run with sudo." >&2
+    exit 1
+  fi
+}
+
+iface_up() {
+  ip link show "$1" >/dev/null 2>&1
+}
+
+down_if_up() {
+  local iface="$1"
+  if iface_up "${iface}"; then
+    wg-quick down "${iface}" >/dev/null
+  fi
+}
+
+endpoint_from_conf() {
+  local file="$1"
+  [[ -r "${file}" ]] || return 0
+  awk -F' *= *' '/^Endpoint *=/ {print $2; exit}' "${file}"
+}
+
+endpoint_ip() {
+  local endpoint="$1"
+  # Generated profiles deliberately use a numeric IPv4 endpoint.
+  printf '%s\n' "${endpoint%:*}"
+}
+
+endpoint_port() {
+  local endpoint="$1"
+  printf '%s\n' "${endpoint##*:}"
+}
+
+remove_jump_v4() {
+  while iptables -C OUTPUT -j "${LOCK_CHAIN}" >/dev/null 2>&1; do
+    iptables -D OUTPUT -j "${LOCK_CHAIN}"
+  done
+}
+
+remove_jump_v6() {
+  while ip6tables -C OUTPUT -j "${LOCK_CHAIN}" >/dev/null 2>&1; do
+    ip6tables -D OUTPUT -j "${LOCK_CHAIN}"
+  done
+}
+
+lock_on() {
+  require_root
+
+  iptables -N "${LOCK_CHAIN}" 2>/dev/null || true
+  iptables -F "${LOCK_CHAIN}"
+  iptables -A "${LOCK_CHAIN}" -o lo -j ACCEPT
+  iptables -A "${LOCK_CHAIN}" -o "${US_IF}" -j ACCEPT 2>/dev/null || true
+  iptables -A "${LOCK_CHAIN}" -o "${UK_IF}" -j ACCEPT 2>/dev/null || true
+
+  for conf in "${US_CONF}" "${UK_CONF}"; do
+    endpoint="$(endpoint_from_conf "${conf}")"
+    [[ -n "${endpoint}" ]] || continue
+    ip="$(endpoint_ip "${endpoint}")"
+    port="$(endpoint_port "${endpoint}")"
+    iptables -A "${LOCK_CHAIN}" -p udp -d "${ip}" --dport "${port}" -j ACCEPT
+  done
+
+  iptables -A "${LOCK_CHAIN}" -j REJECT
+  remove_jump_v4
+  iptables -I OUTPUT 1 -j "${LOCK_CHAIN}"
+
+  # No direct IPv6 egress is allowed while lab lock is active. IPv6 carried
+  # inside the VPN is allowed by the tunnel-interface rules above.
+  ip6tables -N "${LOCK_CHAIN}" 2>/dev/null || true
+  ip6tables -F "${LOCK_CHAIN}"
+  ip6tables -A "${LOCK_CHAIN}" -o lo -j ACCEPT
+  ip6tables -A "${LOCK_CHAIN}" -o "${US_IF}" -j ACCEPT 2>/dev/null || true
+  ip6tables -A "${LOCK_CHAIN}" -o "${UK_IF}" -j ACCEPT 2>/dev/null || true
+  ip6tables -A "${LOCK_CHAIN}" -j REJECT
+  remove_jump_v6
+  ip6tables -I OUTPUT 1 -j "${LOCK_CHAIN}"
+
+  echo "Lab lock: ON. Direct non-VPN egress is blocked."
+}
+
+lock_off() {
+  require_root
+  remove_jump_v4
+  remove_jump_v6
+  iptables -F "${LOCK_CHAIN}" 2>/dev/null || true
+  iptables -X "${LOCK_CHAIN}" 2>/dev/null || true
+  ip6tables -F "${LOCK_CHAIN}" 2>/dev/null || true
+  ip6tables -X "${LOCK_CHAIN}" 2>/dev/null || true
+  echo "Lab lock: OFF."
+}
+
+lock_status() {
+  if iptables -C OUTPUT -j "${LOCK_CHAIN}" >/dev/null 2>&1; then
+    echo "Lab lock: ON"
+  else
+    echo "Lab lock: OFF"
+  fi
+}
+
+show_exit() {
+  if command -v curl >/dev/null 2>&1; then
+    echo
+    curl -fsS --max-time 8 https://ipinfo.io/json 2>/dev/null |       jq -r '"Public IP: \(.ip // "?")\nCountry: \(.country // "?")\nRegion: \(.region // "?")\nCity: \(.city // "?")\nNetwork: \(.org // "?")"' 2>/dev/null || true
+  fi
+}
+
+switch_to() {
+  require_root
+  local target="$1"
+  local conf="/etc/wireguard/${target}.conf"
+
+  [[ -r "${conf}" ]] || {
+    echo "Missing ${conf}" >&2
+    exit 2
+  }
+
+  # If the persistent lab lock is active, refresh it first so both endpoints
+  # remain reachable during the transition.
+  if iptables -C OUTPUT -j "${LOCK_CHAIN}" >/dev/null 2>&1; then
+    lock_on >/dev/null
+  fi
+
+  down_if_up "${US_IF}"
+  down_if_up "${UK_IF}"
+  wg-quick up "${target}"
+
+  echo "Active exit: ${target#research-}"
+  show_exit
+}
+
+case "${1:-status}" in
+  us)
+    switch_to "${US_IF}"
+    ;;
+  uk)
+    switch_to "${UK_IF}"
+    ;;
+  off)
+    require_root
+    down_if_up "${US_IF}"
+    down_if_up "${UK_IF}"
+    echo "VPN tunnels are down."
+    lock_status
+    ;;
+  status)
+    echo "WireGuard:"
+    wg show 2>/dev/null || true
+    echo
+    lock_status
+    show_exit
+    ;;
+  lock)
+    case "${2:-status}" in
+      on) lock_on ;;
+      off) lock_off ;;
+      status) lock_status ;;
+      *) echo "Usage: research-vpn lock <on|off|status>" >&2; exit 2 ;;
+    esac
+    ;;
+  *)
+    echo "Usage: research-vpn <us|uk|off|status|lock on|lock off|lock status>" >&2
+    exit 2
+    ;;
+esac
