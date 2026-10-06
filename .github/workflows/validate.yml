@@ -1,0 +1,29 @@
+name: Validate shell scripts
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash syntax
+        run: |
+          bash -n server/install.sh
+          bash -n server/new-client.sh
+          bash -n client/laptop/install-arch.sh
+          bash -n client/laptop/research-vpn
+          bash -n tools/verify-exit.sh
+      - name: ShellCheck
+        run: |
+          shellcheck -x -e SC1091 server/install.sh
+          shellcheck -x -e SC1091 server/new-client.sh
+          shellcheck client/laptop/install-arch.sh
+          shellcheck client/laptop/research-vpn
+          shellcheck tools/verify-exit.sh
