@@ -57,8 +57,8 @@ sudo bash server/install.sh us
 Create profiles:
 
 ```bash
-sudo bash server/new-client.sh laptop 10.77.0.10
-sudo bash server/new-client.sh phone 10.77.0.11
+sudo bash server/new-client.sh laptop 10.77.0.10 linux
+sudo bash server/new-client.sh phone 10.77.0.11 android
 ```
 
 ## 3. Install the UK exit
@@ -69,8 +69,8 @@ On the UK VPS:
 git clone https://github.com/XGENMANIAC/Vps.git
 cd Vps
 sudo bash server/install.sh uk
-sudo bash server/new-client.sh laptop 10.78.0.10
-sudo bash server/new-client.sh phone 10.78.0.11
+sudo bash server/new-client.sh laptop 10.78.0.10 linux
+sudo bash server/new-client.sh phone 10.78.0.11 android
 ```
 
 The generated client files are written under:
@@ -106,6 +106,18 @@ sudo research-vpn us
 sudo research-vpn status
 sudo research-vpn uk
 sudo research-vpn off
+```
+
+For suspicious-app/network testing, turn on the persistent lab lock **before** launching the app:
+
+```bash
+sudo research-vpn lock on
+sudo research-vpn us
+# launch/test the app
+sudo research-vpn uk
+# continue through the UK exit
+sudo research-vpn off       # tunnel down; lab lock still blocks direct egress
+sudo research-vpn lock off  # restore normal networking only after the app is closed
 ```
 
 Verify the exit:
