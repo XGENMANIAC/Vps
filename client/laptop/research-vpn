@@ -57,6 +57,13 @@ remove_jump_v6() {
 lock_on() {
   require_root
 
+  # Never flush a live enforcement chain. If the lock is already attached,
+  # leave it untouched so there is no transient fail-open window.
+  if iptables -C OUTPUT -j "${LOCK_CHAIN}" >/dev/null 2>&1; then
+    echo "Lab lock: already ON."
+    return 0
+  fi
+
   iptables -N "${LOCK_CHAIN}" 2>/dev/null || true
   iptables -F "${LOCK_CHAIN}"
   iptables -A "${LOCK_CHAIN}" -o lo -j ACCEPT
@@ -125,12 +132,9 @@ switch_to() {
     exit 2
   }
 
-  # If the persistent lab lock is active, refresh it first so both endpoints
-  # remain reachable during the transition.
-  if iptables -C OUTPUT -j "${LOCK_CHAIN}" >/dev/null 2>&1; then
-    lock_on >/dev/null
-  fi
-
+  # Do not rebuild/flush the persistent lock here. A live lock already
+  # contains both configured endpoints, so it remains continuously enforced
+  # while one tunnel goes down and the other comes up.
   down_if_up "${US_IF}"
   down_if_up "${UK_IF}"
   wg-quick up "${target}"
